@@ -176,7 +176,7 @@ func (p *boolParser) primary() (bool, error) {
 }
 
 func isAlpha(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+	return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 func isAlphaNum(c byte) bool {

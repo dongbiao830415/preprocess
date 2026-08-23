@@ -33,7 +33,7 @@ func TestBuildSet(t *testing.T) {
 }
 
 func TestEvalBool(t *testing.T) {
-	set := buildSet(Define("FOO"))
+	set := buildSet(Define("FOO"), Define("__MODULE__"), Define("_X"), Define("_"))
 	tests := []struct {
 		expr string
 		want bool
@@ -49,6 +49,9 @@ func TestEvalBool(t *testing.T) {
 		{"(FOO || MISSING) && !MISSING", true},
 		{"((FOO))", true},
 		{"MISSING && MISSING2 || FOO && FOO", true},
+		{"__MODULE__", true},
+		{"_X", true},
+		{"_", true},
 	}
 	for _, tt := range tests {
 		got, err := evalBool(tt.expr, 1, set)
@@ -136,6 +139,14 @@ func TestProcess(t *testing.T) {
 			"%ifdef FOO\ntext\n%endif\n",
 			[]Op{Undefine("FOO"), Define("FOO")},
 			"          \ntext\n      \n"},
+		{"underscore macro",
+			"%ifdef __MODULE__\ntext\n%endif\n",
+			[]Op{Define("__MODULE__")},
+			"                 \ntext\n      \n"},
+		{"underscore macro false",
+			"%ifdef __MODULE__\ntext\n%endif\n",
+			nil,
+			"                 \n    \n      \n"},
 		{"else taken",
 			"%ifdef FOO\na\n%else\nb\n%endif\n",
 			[]Op{Define("FOO")},
