@@ -13,34 +13,53 @@ import (
 	"strings"
 )
 
+// Op is a single macro operation, mirroring the lemon command line options:
+// Define is -D, Undefine is -U. Operations are applied in the order given, so
+// an Undefine only removes macros defined by earlier Define operations.
+type Op struct {
+	Name  string
+	Undef bool // false = -D (define), true = -U (undefine).
+}
+
+// Define returns the operation defining macro NAME (-D NAME[=VALUE]; for an
+// entry with =, only NAME is defined).
+func Define(name string) Op { return Op{Name: name} }
+
+// Undefine returns the operation undefining macro NAME (-U NAME).
+func Undefine(name string) Op { return Op{Name: name, Undef: true} }
+
 // Process handles the %ifdef/%if/%ifndef/%elif/%else/%endif directives in
-// src. defs are the defined macros (-D semantics; with NAME=VALUE only NAME
-// is defined), undefs are the undefined macros (-U semantics, having priority
-// over defs). Directive lines and excluded text are replaced by spaces,
-// newlines are kept, so line numbers are preserved. CRLF line separators are
+// src. ops are the macro operations (-D/-U semantics) applied in the order
+// given. Directive lines and excluded text are replaced by spaces, newlines
+// are kept, so line numbers are preserved. CRLF line separators are
 // normalized to LF. On error a non-nil error with a line number is returned.
-func Process(src []rune, defs, undefs []string) ([]rune, error) {
-	return process(normalize(src), buildSet(defs, undefs))
+func Process(src []rune, ops ...Op) ([]rune, error) {
+	return process(normalize(src), buildSet(ops...))
 }
 
 // ProcessString is the string version of Process.
-func ProcessString(src string, defs, undefs []string) (string, error) {
-	out, err := Process([]rune(src), defs, undefs)
+func ProcessString(src string, ops ...Op) (string, error) {
+	out, err := Process([]rune(src), ops...)
 	return string(out), err
 }
 
-// buildSet returns the set of defined macros: all of defs minus all of
-// undefs. For defs entries, everything from = on is discarded.
-func buildSet(defs, undefs []string) map[string]bool {
+// buildSet returns the set of defined macros after applying ops in order: a
+// Define adds its name (everything from = on is discarded), an Undefine
+// removes its name.
+func buildSet(ops ...Op) map[string]bool {
 	set := map[string]bool{}
-	for _, d := range defs {
-		if i := strings.IndexByte(d, '='); i >= 0 {
-			d = d[:i]
+	for _, op := range ops {
+		name := op.Name
+		if !op.Undef {
+			if i := strings.IndexByte(name, '='); i >= 0 {
+				name = name[:i]
+			}
 		}
-		set[d] = true
-	}
-	for _, u := range undefs {
-		delete(set, u)
+		if op.Undef {
+			delete(set, name)
+		} else {
+			set[name] = true
+		}
 	}
 	return set
 }

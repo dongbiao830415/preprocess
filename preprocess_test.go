@@ -6,8 +6,34 @@ package preprocess
 
 import "testing"
 
+func TestBuildSet(t *testing.T) {
+	tests := []struct {
+		name string
+		ops  []Op
+		want map[string]bool
+	}{
+		{"define value truncated", []Op{Define("FOO=bar")}, map[string]bool{"FOO": true}},
+		{"undef then define", []Op{Undefine("A"), Define("A")}, map[string]bool{"A": true}},
+		{"define then undef", []Op{Define("A"), Undefine("A")}, map[string]bool{}},
+		{"redefine", []Op{Define("A"), Undefine("A"), Define("A")}, map[string]bool{"A": true}},
+		{"undefine no-op", []Op{Undefine("MISSING")}, map[string]bool{}},
+	}
+	for _, tt := range tests {
+		got := buildSet(tt.ops...)
+		if len(got) != len(tt.want) {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+			continue
+		}
+		for k := range tt.want {
+			if !got[k] {
+				t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+			}
+		}
+	}
+}
+
 func TestEvalBool(t *testing.T) {
-	set := buildSet([]string{"FOO"}, nil)
+	set := buildSet(Define("FOO"))
 	tests := []struct {
 		expr string
 		want bool
@@ -36,22 +62,6 @@ func TestEvalBool(t *testing.T) {
 	}
 }
 
-func TestBuildSet(t *testing.T) {
-	set := buildSet([]string{"FOO=bar", "BAZ"}, []string{"BAZ", "MISSING"})
-	if !set["FOO"] || set["bar"] {
-		t.Errorf("define with value: got %v", set)
-	}
-	if set["BAZ"] {
-		t.Error("undefine has priority")
-	}
-	if set["MISSING"] {
-		t.Error("undefining an undefined macro is a no-op")
-	}
-	if len(set) != 1 {
-		t.Errorf("got %v", set)
-	}
-}
-
 func TestProcessString(t *testing.T) {
 	tests := []struct {
 		name string
@@ -63,7 +73,7 @@ func TestProcessString(t *testing.T) {
 		{"lone cr kept", "a\rb\n", "a\rb\n"},
 	}
 	for _, tt := range tests {
-		got, err := ProcessString(tt.in, nil, nil)
+		got, err := ProcessString(tt.in)
 		if err != nil {
 			t.Errorf("%s: %v", tt.name, err)
 			continue
@@ -74,9 +84,9 @@ func TestProcessString(t *testing.T) {
 	}
 }
 
-func pp(t *testing.T, in string, defs, undefs []string) string {
+func pp(t *testing.T, in string, ops ...Op) string {
 	t.Helper()
-	out, err := Process([]rune(in), defs, undefs)
+	out, err := Process([]rune(in), ops...)
 	if err != nil {
 		t.Fatalf("Process: %v", err)
 	}
@@ -85,87 +95,90 @@ func pp(t *testing.T, in string, defs, undefs []string) string {
 
 func TestProcess(t *testing.T) {
 	tests := []struct {
-		name   string
-		in     string
-		defs   []string
-		undefs []string
-		want   string
+		name string
+		in   string
+		ops  []Op
+		want string
 	}{
 		{"ifdef true",
 			"%ifdef FOO\ntext\n%endif\n",
-			[]string{"FOO", "BAR"}, nil,
+			[]Op{Define("FOO"), Define("BAR")},
 			"          \ntext\n      \n"},
 		{"ifdef false",
 			"%ifdef MISSING\ntext\n%endif\n",
-			[]string{"FOO", "BAR"}, nil,
+			[]Op{Define("FOO"), Define("BAR")},
 			"              \n    \n      \n"},
 		{"ifndef false",
 			"%ifndef FOO\ntext\n%endif\n",
-			[]string{"FOO", "BAR"}, nil,
+			[]Op{Define("FOO"), Define("BAR")},
 			"           \n    \n      \n"},
 		{"ifndef true",
 			"%ifndef MISSING\ntext\n%endif\n",
-			[]string{"FOO", "BAR"}, nil,
+			[]Op{Define("FOO"), Define("BAR")},
 			"               \ntext\n      \n"},
 		{"if expr",
 			"%if FOO && BAR\ntext\n%endif\n",
-			[]string{"FOO", "BAR"}, nil,
+			[]Op{Define("FOO"), Define("BAR")},
 			"              \ntext\n      \n"},
 		{"if not",
 			"%if !MISSING\ntext\n%endif\n",
-			[]string{"FOO", "BAR"}, nil,
+			[]Op{Define("FOO"), Define("BAR")},
 			"            \ntext\n      \n"},
 		{"if parens",
 			"%if (FOO || MISSING) && BAR\ntext\n%endif\n",
-			[]string{"FOO", "BAR"}, nil,
+			[]Op{Define("FOO"), Define("BAR")},
 			"                           \ntext\n      \n"},
-		{"undef priority",
+		{"define then undef",
 			"%ifdef FOO\ntext\n%endif\n",
-			[]string{"FOO"}, []string{"FOO"},
+			[]Op{Define("FOO"), Undefine("FOO")},
 			"          \n    \n      \n"},
+		{"undef then define",
+			"%ifdef FOO\ntext\n%endif\n",
+			[]Op{Undefine("FOO"), Define("FOO")},
+			"          \ntext\n      \n"},
 		{"else taken",
 			"%ifdef FOO\na\n%else\nb\n%endif\n",
-			[]string{"FOO"}, nil,
+			[]Op{Define("FOO")},
 			"          \na\n     \n \n      \n"},
 		{"else not taken",
 			"%ifdef MISSING\na\n%else\nb\n%endif\n",
-			[]string{"FOO"}, nil,
+			[]Op{Define("FOO")},
 			"              \n \n     \nb\n      \n"},
 		{"elif chain",
 			"%ifdef MISSING\na\n%elif BAR\nb\n%else\nc\n%endif\n",
-			[]string{"FOO", "BAR"}, nil,
+			[]Op{Define("FOO"), Define("BAR")},
 			"              \n \n         \nb\n     \n \n      \n"},
 		{"elif taken",
 			"%ifdef FOO\na\n%elif BAR\nb\n%endif\n",
-			[]string{"FOO", "BAR"}, nil,
+			[]Op{Define("FOO"), Define("BAR")},
 			"          \na\n         \nb\n      \n"},
 		{"elif not taken",
 			"%ifdef MISSING\na\n%elif MISSING2\nb\n%endif\n",
-			[]string{"FOO"}, nil,
+			[]Op{Define("FOO")},
 			"              \n \n              \n \n      \n"},
 		{"nested",
 			"%ifdef FOO\n%ifdef MISSING\na\n%endif\n%endif\nx\n",
-			[]string{"FOO"}, nil,
+			[]Op{Define("FOO")},
 			"          \n              \n \n      \n      \nx\n"},
 		{"not line start",
 			"x %ifdef FOO\ny\n",
-			[]string{"FOO"}, nil,
+			[]Op{Define("FOO")},
 			"x %ifdef FOO\ny\n"},
 		{"indented not directive",
 			"  %ifdef FOO\ny\n",
-			[]string{"FOO"}, nil,
+			[]Op{Define("FOO")},
 			"  %ifdef FOO\ny\n"},
 		{"unmatched endif ignored",
 			"%endif\ntext\n",
-			nil, nil,
+			nil,
 			"      \ntext\n"},
 		{"crlf input",
 			"%ifdef FOO\r\ntext\r\n%endif\r\n",
-			[]string{"FOO"}, nil,
+			[]Op{Define("FOO")},
 			"          \ntext\n      \n"},
 	}
 	for _, tt := range tests {
-		if got := pp(t, tt.in, tt.defs, tt.undefs); got != tt.want {
+		if got := pp(t, tt.in, tt.ops...); got != tt.want {
 			t.Errorf("%s:\nin  %q\nout %q\nwant%q", tt.name, tt.in, got, tt.want)
 		}
 	}
@@ -194,7 +207,7 @@ func TestProcessErrors(t *testing.T) {
 			"%elif after %else on line 3"},
 	}
 	for _, tt := range tests {
-		_, err := Process([]rune(tt.in), nil, nil)
+		_, err := Process([]rune(tt.in))
 		if err == nil {
 			t.Errorf("%s: expected error, got none", tt.name)
 			continue
